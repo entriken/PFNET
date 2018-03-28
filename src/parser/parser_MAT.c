@@ -121,18 +121,23 @@ Parser* MAT_PARSER_new(void) {
   PARSER_set_func_show(p,&MAT_PARSER_show);
   PARSER_set_func_write(p,&MAT_PARSER_write);
   PARSER_set_func_free(p,&MAT_PARSER_free);
-  PARSER_init(p);
+  PARSER_init(p,TRUE);
   return p;
 }
 
-void MAT_PARSER_init(Parser* p) {
+void MAT_PARSER_init(Parser* p, BOOL init_params) {
 
+  // Local variables
+  MAT_Parser* parser;
+  
   // No parser
   if (!p)
     return;
 
   // Allocate
-  MAT_Parser* parser = (MAT_Parser*)malloc(sizeof(MAT_Parser));
+  parser = (MAT_Parser*)PARSER_get_data(p);
+  if (!parser)
+    parser = (MAT_Parser*)malloc(sizeof(MAT_Parser));
   
   // Error
   parser->error_flag = FALSE;
@@ -144,8 +149,10 @@ void MAT_PARSER_init(Parser* p) {
   parser->record = 0;
   MAT_PARSER_clear_token(parser);
   
-  // Options
-  parser->output_level = 0;
+  // Parameters
+  if (init_params) {
+    parser->output_level = 0;
+  }
 
   // Base
   parser->base_power = MAT_PARSER_BASE_POWER;
@@ -304,7 +311,7 @@ void MAT_PARSER_write(Parser* p, Net* net, char* f) {
   // nothing
 }
 
-void MAT_PARSER_free(Parser* p) {
+void MAT_PARSER_free(Parser* p, BOOL del_parser) {
 
   // Local variables
   MAT_Parser* parser = (MAT_Parser*)PARSER_get_data(p);
@@ -331,7 +338,8 @@ void MAT_PARSER_free(Parser* p) {
   LIST_map(MAT_Util,parser->util_list,util,next,{free(util);});
 
   // Free parser
-  free(parser);
+  if (del_parser)
+    free(parser);
 }
 
 void MAT_PARSER_load(MAT_Parser* parser, Net* net) {
@@ -396,6 +404,8 @@ void MAT_PARSER_load(MAT_Parser* parser, Net* net) {
   for (mat_bus = parser->bus_list; mat_bus != NULL; mat_bus = mat_bus->next) {
     bus = NET_get_bus(net,index);             // get bus
     BUS_set_number(bus,mat_bus->number);
+    BUS_set_area(bus,mat_bus->area);
+    BUS_set_zone(bus,mat_bus->zone);
     BUS_set_name(bus,mat_bus->name);
     BUS_set_v_mag(bus,mat_bus->Vm,0);         // per unit
     BUS_set_v_ang(bus,mat_bus->Va*PI/180.,0); // radians

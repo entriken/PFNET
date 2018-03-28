@@ -1,6 +1,5 @@
 Targets
 -------
-* Mechanism for changing constraint parameters.
 * MAT or ART data writer.
 * CIM parser written in python.
 * Rich object comparisons for all network components.
@@ -10,6 +9,10 @@ Targets
 
 Unreleased
 ----------
+* Updated parser init/free routines to make parser params work.
+
+Version 1.3.3
+-------------
 * Improved gen Q participation to look exactly at which Qs are vars to add correct number of constraints.
 * Added support for changing function and constraint parameters (CONSTR_set_parameter, FUNC_set_parameter).
 * Added "variable regularization" function or FUNC_REG_VAR, which has parameters w and x0 and computes (x-x0)^Tdiag(w)(x-x0).
@@ -27,12 +30,23 @@ Unreleased
 * Extended problem.show() to show number of vars and constraints of each type.
 * Fix bug involving problem/constraint/function's network going out of scope in Python.
 * Added load reactive power limits.
+* Integrated line_flow library source and header for linearized AC branch flow limits.
 * Added Q_par (reactive power participation) field to generator.
 * Changed REG_GEN constraint to treat generators separately so that constraint can be used without participations.
 * Changed PAR_GEN_Q constraint to PVPQ_SWITCHING, which enforces flexible participations based on Q_par and performs all required modifications for PV-PQ switching heuristics.
 * Updated PVPQ switching heuristics to utilize PVPQ_SWITCHING constraint.
 * Removed net adjust_generators.
+* Improved handling of branch and gen outages: Outages can be enabled by setting the outage flag. Contingencies no longer disconnect components.
 * Added bus.is_star(), branch.is_part_of_3_winding_transformer(), and net.get_num_star_buses().
+* Added routines for getting number of gens/branches on outage.
+* Added utility routines to check function gradients and Hessians in pfnet.tests.utils.
+* Added utility routines to check constraint Jacobians and Hessians in pfnet.tests.utils.
+* Created network state tag to track net changes and make constr/funcs robust to net changes like outage flag updates.
+* Updated bus.get_index_P and bus.get_index_Q to make bus.get_index_P work for both AC and DC PF as well as for multiple periods.
+* Added bus.get_index_t for getting unique indices for each bus and time.
+* Added bus area and zone.
+* Started julia wrapper.
+* Moved python and julia wrappers to separate repos.
 
 Version 1.3.2
 -------------

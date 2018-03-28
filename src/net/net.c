@@ -81,12 +81,27 @@ struct Net {
   int* num_actions;   /**< @brief Number of control actions. */
 
   // Spatial correlation
-  REAL vargen_corr_radius; /**< @brief Correlation radius for variable generators. **/
-  REAL vargen_corr_value;  /**< @brief Correlation value for variable generators. **/
+  REAL vargen_corr_radius; /**< @brief Correlation radius for variable generators. */
+  REAL vargen_corr_value;  /**< @brief Correlation value for variable generators. */
+
+  // State tag
+  unsigned long int state_tag; /**< @brief State tag. */
 
   // Utils
   char* bus_counted;  /**< @brief Flags for processing buses */
 };
+
+void NET_inc_state_tag(Net* net) {
+  if (net)
+    net->state_tag++;
+}
+
+unsigned long int NET_get_state_tag(Net* net) {
+  if (net)
+    return net->state_tag;
+  else
+    return 0;
+}
 
 void NET_add_buses(Net* net, Bus** bus_ptr_array, int size) {
   /** Adds buses to the network. The entire bus array is
@@ -2569,6 +2584,9 @@ void NET_init(Net* net, int num_periods) {
 
   ARRAY_zalloc(net->num_actions,int,T);
 
+  // State tag
+  net->state_tag = 0;
+
   // Utils
   net->bus_counted = NULL;
 }
@@ -2721,6 +2739,26 @@ Shunt* NET_get_shunt_from_name_and_bus_number(Net* net, char* name, int number) 
   return NULL;
 }
 
+Shunt* NET_get_fixed_shunt_from_name_and_bus_number(Net* net, char* name, int number) {
+  Shunt* shunt;
+  Bus* bus = NET_bus_hash_number_find(net, number);
+  for (shunt = BUS_get_shunt(bus); shunt != NULL; shunt = SHUNT_get_next(shunt)) {
+    if (SHUNT_is_fixed(shunt) && strcmp(SHUNT_get_name(shunt), name) == 0)
+      return shunt;
+  }
+  return NULL;
+}
+
+Shunt* NET_get_switched_shunt_from_name_and_bus_number(Net* net, char* name, int number) {
+  Shunt* shunt;
+  Bus* bus = NET_bus_hash_number_find(net, number);
+  for (shunt = BUS_get_shunt(bus); shunt != NULL; shunt = SHUNT_get_next(shunt)) {
+    if (SHUNT_is_switched(shunt) && strcmp(SHUNT_get_name(shunt), name) == 0)
+      return shunt;
+  }
+  return NULL;
+}
+
 Load* NET_get_load_from_name_and_bus_number(Net* net, char* name, int number) {
   Load* load;
   Bus* bus = NET_bus_hash_number_find(net, number);
@@ -2864,6 +2902,13 @@ int NET_get_num_branches(Net* net) {
     return 0;
 }
 
+int NET_get_num_branches_on_outage(Net* net) {
+  if (net)
+    return net->num_branches-NET_get_num_branches_not_on_outage(net);
+  else
+    return 0;
+}
+
 int NET_get_num_branches_not_on_outage(Net* net) {
   int i;
   int n = 0;
@@ -2951,6 +2996,13 @@ int NET_get_num_tap_changers_Q(Net* net) {
 int NET_get_num_gens(Net* net) {
   if (net)
     return net->num_gens;
+  else
+    return 0;
+}
+
+int NET_get_num_gens_on_outage(Net* net) {
+  if (net)
+    return net->num_gens-NET_get_num_gens_not_on_outage(net);
   else
     return 0;
 }
@@ -3631,9 +3683,16 @@ void NET_set_base_power(Net* net, REAL base_power) {
 }
 
 void NET_set_branch_array(Net* net, Branch* branch, int num) {
+  int i;
   if (net) {
+
+    // Pointers
     net->branch = branch;
     net->num_branches = num;
+
+    // Network
+    for (i = 0; i < net->num_branches; i++)
+      BRANCH_set_network(BRANCH_array_get(net->branch,i), net);
   }
 }
 
@@ -3652,18 +3711,34 @@ void NET_set_shunt_array(Net* net, Shunt* shunt, int num) {
 }
 
 void NET_set_bus_array(Net* net, Bus* bus, int num) {
+  int i;
   if (net) {
+
+    // Pointers
     net->bus = bus;
     net->num_buses = num;
+
+    // Utils
     free(net->bus_counted);
     ARRAY_zalloc(net->bus_counted,char,net->num_buses*net->num_periods);
+
+    // Network
+    for (i = 0; i < net->num_buses; i++)
+      BUS_set_network(BUS_array_get(net->bus,i), net);
   }
 }
 
 void NET_set_gen_array(Net* net, Gen* gen, int num) {
+  int i;
   if (net) {
+
+    // Pointers
     net->gen = gen;
     net->num_gens = num;
+
+    // Network
+    for (i = 0; i < net->num_gens; i++)
+      GEN_set_network(GEN_array_get(net->gen,i), net);
   }
 }
 
@@ -3933,6 +4008,7 @@ char* NET_get_show_components_str(Net* net) {
   sprintf(out+strlen(out),"  reg by gen     : %d\n",NET_get_num_buses_reg_by_gen(net));
   sprintf(out+strlen(out),"  reg by tran    : %d\n",NET_get_num_buses_reg_by_tran(net));
   sprintf(out+strlen(out),"  reg by shunt   : %d\n",NET_get_num_buses_reg_by_shunt(net));
+  sprintf(out+strlen(out),"  star           : %d\n",NET_get_num_star_buses(net));
   sprintf(out+strlen(out),"shunts           : %d\n",NET_get_num_shunts(net));
   sprintf(out+strlen(out),"  fixed          : %d\n",NET_get_num_fixed_shunts(net));
   sprintf(out+strlen(out),"  switched v     : %d\n",NET_get_num_switched_shunts(net));
@@ -4155,10 +4231,6 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
   if (!net || !br)
     return;
 
-  // Check outage
-  if (BRANCH_is_on_outage(br))
-    return;
-
   // Bus
   buses[0] = BRANCH_get_bus_k(br);
   buses[1] = BRANCH_get_bus_m(br);
@@ -4186,7 +4258,7 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
     phi = BRANCH_get_phase(br,t);
 
   // Tap ratios
-  if (BRANCH_is_tap_changer(br)) {
+  if (BRANCH_is_tap_changer(br) && !BRANCH_is_on_outage(br)) {
 
     // Tap ratio limit violations
     //***************************
@@ -4208,7 +4280,7 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
   }
 
   // Phase shifts
-  if (BRANCH_is_phase_shifter(br)) {
+  if (BRANCH_is_phase_shifter(br) && !BRANCH_is_on_outage(br)) {
 
     // Phase shift limit violations
     //*****************************
@@ -4234,6 +4306,10 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
 
     bus = buses[k];
 
+    // Skip if branch on outage
+    if (BRANCH_is_on_outage(br))
+      break;
+
     // Update injected P,Q at buses k and m
     if (k == 0) {
       BUS_inject_P(bus,-BRANCH_get_P_km(br,var_values,t),t);
@@ -4245,7 +4321,7 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
     }
   }
 
-  // Other flows
+  // Other flows and things
   for (k = 0; k < 2; k++) {
 
     bus = buses[k];
@@ -4270,7 +4346,7 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
     }
 
     // Normal voltage magnitude limit violations
-    //************************************
+    //******************************************
     dv = 0;
     if (v[k] > BUS_get_v_max_norm(bus))
       dv = v[k]-BUS_get_v_max_norm(bus);
@@ -4286,7 +4362,7 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
       dv = v[k]-BUS_get_v_max_reg(bus);
     if (v[k] < BUS_get_v_min_reg(bus))
       dv = BUS_get_v_min_reg(bus)-v[k];
-    if (BUS_is_regulated_by_tran(bus)) {
+    if (BUS_is_regulated_by_tran(bus)) { // false if all reg trans are on outage
       if (dv > net->tran_v_vio[t])
 	net->tran_v_vio[t] = dv;
     }
@@ -4296,7 +4372,7 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
     }
 
     // Bus regulated by gen
-    if (BUS_is_regulated_by_gen(bus)) {
+    if (BUS_is_regulated_by_gen(bus)) { // false if all reg gens are on outage
 
       // Voltage set point deviation
       //****************************
@@ -4315,6 +4391,11 @@ void NET_update_properties_step(Net* net, Branch* br, int t, Vec* var_values) {
     // Generators
     for (gen = BUS_get_gen(bus); gen != NULL; gen = GEN_get_next(gen)) {
 
+      // Skip if gen on outage
+      if (GEN_is_on_outage(gen))
+	continue;
+      
+      // P Q
       if (GEN_has_flags(gen,FLAG_VARS,GEN_VAR_P) && var_values)
 	P = VEC_get(var_values,GEN_get_index_P(gen,t));
       else

@@ -15,6 +15,7 @@
 #include <pfnet/shunt.h>
 #include <pfnet/vargen.h>
 #include <pfnet/bat.h>
+#include <pfnet/net.h>
 #include <pfnet/array.h>
 #include <pfnet/json_macros.h>
 
@@ -25,10 +26,14 @@ struct Bus {
   char name[BUS_BUFFER_SIZE]; /**< @brief Bus name */
 
   // Times
-  int num_periods;    /**< @brief Number of time periods. */
+  int num_periods;    /**< @brief Number of time periods */
+
+  // Area, zone
+  int area;           /**< @brief Bus area */
+  int zone;           /**< @brief Bus zone */
 
   // Voltage
-  REAL v_base;       /**< @brief Base voltage (kilovolts) */
+  REAL v_base;        /**< @brief Base voltage (kilovolts) */
   REAL* v_mag;        /**< @brief Voltage magnitude (p.u.) */
   REAL* v_ang;        /**< @brief Voltage angle (radians) */
   REAL* v_set;        /**< @brief Voltage magnitude set point (p.u.) */
@@ -86,6 +91,9 @@ struct Bus {
   UT_hash_handle hh_number; /**< @brief Handle for bus hash table based on numbers */
   UT_hash_handle hh_name;   /**< @brief Handle for bus hash table based on names */
 
+  // Network
+  Net* net; /**< @brief Network. */
+  
   // List
   Bus* next; /**< @brief List of buses */
 };
@@ -470,6 +478,10 @@ void BUS_copy_from_bus(Bus* bus, Bus* other) {
   bus->number = other->number;
   strcpy(bus->name,other->name);
 
+  // Area, zone
+  bus->area = other->area;
+  bus->zone = other->zone;
+
   // Time
   // skip num periods
 
@@ -524,6 +536,20 @@ void BUS_copy_from_bus(Bus* bus, Bus* other) {
 
   // List
   // skip next
+}
+
+int BUS_get_area(Bus* bus) {
+  if (bus)
+    return bus->area;
+  else
+    return 1;
+}
+
+int BUS_get_zone(Bus* bus) {
+  if (bus)
+    return bus->zone;
+  else
+    return 1;
 }
 
 char BUS_get_flags_vars(Bus* bus) {
@@ -589,6 +615,13 @@ int BUS_get_index(Bus* bus) {
     return -1;
 }
 
+int BUS_get_index_t(Bus* bus, int t) {
+  if (bus && t >= 0 && t < bus->num_periods)
+    return bus->index+t*NET_get_num_buses(bus->net);
+  else
+    return -1;
+}
+
 int BUS_get_index_v_mag(Bus* bus, int t) {
   if (bus && t >= 0 && t < bus->num_periods)
     return bus->index_v_mag[t];
@@ -603,16 +636,16 @@ int BUS_get_index_v_ang(Bus* bus, int t) {
     return -1;
 }
 
-int BUS_get_index_P(Bus* bus) {
-  if (bus)
-    return 2*bus->index;
+int BUS_get_index_P(Bus* bus, int t) {
+  if (bus && t >= 0 && t < bus->num_periods)
+    return bus->index + t*NET_get_num_buses(bus->net);
   else
     return -1;
 }
 
-int BUS_get_index_Q(Bus* bus) {
-  if (bus)
-    return 2*bus->index+1;
+int BUS_get_index_Q(Bus* bus, int t) {
+  if (bus && t >= 0 && t < bus->num_periods)
+    return bus->index + (t+bus->num_periods)*NET_get_num_buses(bus->net);
   else
     return -1;
 }
@@ -790,8 +823,10 @@ REAL BUS_get_total_gen_P(Bus* bus, int t) {
   REAL P = 0;
   if (!bus || t < 0 || t >= bus->num_periods)
     return 0;
-  for (gen = bus->gen; gen != NULL; gen = GEN_get_next(gen))
-    P += GEN_get_P(gen,t);
+  for (gen = bus->gen; gen != NULL; gen = GEN_get_next(gen)) {
+    if (!GEN_is_on_outage(gen))
+      P += GEN_get_P(gen,t);
+  }
   return P;
 }
 
@@ -800,8 +835,10 @@ REAL BUS_get_total_gen_Q(Bus* bus, int t) {
   REAL Q = 0;
   if (!bus || t < 0 || t >= bus->num_periods)
     return 0;
-  for (gen = bus->gen; gen != NULL; gen = GEN_get_next(gen))
-    Q += GEN_get_Q(gen,t);
+  for (gen = bus->gen; gen != NULL; gen = GEN_get_next(gen)) {
+    if (!GEN_is_on_outage(gen))
+      Q += GEN_get_Q(gen,t);
+  }
   return Q;
 }
 
@@ -810,8 +847,10 @@ REAL BUS_get_total_gen_Q_max(Bus* bus) {
   REAL Qmax = 0;
   if (!bus)
     return 0;
-  for (gen = bus->gen; gen != NULL; gen = GEN_get_next(gen))
-    Qmax += GEN_get_Q_max(gen);
+  for (gen = bus->gen; gen != NULL; gen = GEN_get_next(gen)) {
+    if (!GEN_is_on_outage(gen))
+      Qmax += GEN_get_Q_max(gen);
+  }
   return Qmax;
 }
 
@@ -820,28 +859,46 @@ REAL BUS_get_total_gen_Q_min(Bus* bus) {
   REAL Qmin = 0;
   if (!bus)
     return 0;
-  for (gen = bus->gen; gen != NULL; gen = GEN_get_next(gen))
-    Qmin += GEN_get_Q_min(gen);
+  for (gen = bus->gen; gen != NULL; gen = GEN_get_next(gen)) {
+    if (!GEN_is_on_outage(gen))
+      Qmin += GEN_get_Q_min(gen);
+  }
   return Qmin;
 }
 
-REAL BUS_get_total_reg_gen_Qmax(Bus* bus) {
+REAL BUS_get_total_reg_gen_Q(Bus* bus, int t) {
+  Gen* gen;
+  REAL Q = 0;
+  if (!bus)
+    return 0;
+  for (gen = bus->reg_gen; gen != NULL; gen = GEN_get_reg_next(gen)) {
+    if (!GEN_is_on_outage(gen))
+      Q += GEN_get_Q(gen,t);
+  }
+  return Q;
+}
+
+REAL BUS_get_total_reg_gen_Q_max(Bus* bus) {
   Gen* gen;
   REAL Qmax = 0;
   if (!bus)
     return 0;
-  for (gen = bus->reg_gen; gen != NULL; gen = GEN_get_reg_next(gen))
-    Qmax += GEN_get_Q_max(gen);
+  for (gen = bus->reg_gen; gen != NULL; gen = GEN_get_reg_next(gen)) {
+    if (!GEN_is_on_outage(gen))
+      Qmax += GEN_get_Q_max(gen);
+  }
   return Qmax;
 }
 
-REAL BUS_get_total_reg_gen_Qmin(Bus* bus) {
+REAL BUS_get_total_reg_gen_Q_min(Bus* bus) {
   Gen* gen;
   REAL Qmin = 0;
   if (!bus)
     return 0;
-  for (gen = bus->reg_gen; gen != NULL; gen = GEN_get_reg_next(gen))
-    Qmin += GEN_get_Q_min(gen);
+  for (gen = bus->reg_gen; gen != NULL; gen = GEN_get_reg_next(gen)) {
+    if (!GEN_is_on_outage(gen))
+      Qmin += GEN_get_Q_min(gen);
+  }
   return Qmin;
 }
 
@@ -1404,6 +1461,8 @@ char* BUS_get_json_string(Bus* bus, char* output) {
   JSON_int(temp,output,"index",bus->index,FALSE);
   JSON_int(temp,output,"number",bus->number,FALSE);
   JSON_str(temp,output,"name",bus->name,FALSE);
+  JSON_int(temp,output,"area",bus->area,FALSE);
+  JSON_int(temp,output,"zone",bus->zone,FALSE);
   JSON_int(temp,output,"num_periods",bus->num_periods,FALSE);
   JSON_float(temp,output,"v_base",bus->v_base,FALSE);
   JSON_array_float(temp,output,"v_mag",bus->v_mag,bus->num_periods,FALSE);
@@ -1543,6 +1602,9 @@ void BUS_init(Bus* bus, int num_periods) {
 
   bus->v_base = 0.;
 
+  bus->area = 1;
+  bus->zone = 1;
+
   bus->index = -1;
 
   bus->v_max_reg = BUS_DEFAULT_V_MAX;
@@ -1592,6 +1654,8 @@ void BUS_init(Bus* bus, int num_periods) {
   ARRAY_zalloc(bus->P_mis,REAL,T);
   ARRAY_zalloc(bus->Q_mis,REAL,T);
 
+  bus->net = NULL;
+  
   for (t = 0; t < bus->num_periods; t++) {
     bus->v_mag[t] = 1.;
     bus->v_set[t] = 1.;
@@ -1615,17 +1679,25 @@ BOOL BUS_is_equal(Bus* bus, Bus* other) {
 }
 
 BOOL BUS_is_regulated_by_gen(Bus* bus) {
-  if (bus)
-    return bus->reg_gen != NULL;
-  else
-    return FALSE;
+  Gen* gen;
+  if (bus) {
+    for (gen = bus->reg_gen; gen != NULL; gen = GEN_get_reg_next(gen)) {
+      if (!GEN_is_on_outage(gen))
+	return TRUE;
+    }
+  }
+  return FALSE;
 }
 
 BOOL BUS_is_regulated_by_tran(Bus* bus) {
-  if (bus)
-    return bus->reg_tran != NULL;
-  else
-    return FALSE;
+  Branch* br;
+  if (bus) {
+    for (br = bus->reg_tran; br != NULL; br = BRANCH_get_reg_next(br)) {
+      if (!BRANCH_is_on_outage(br))
+	return TRUE;
+    }
+  }
+  return FALSE;
 }
 
 BOOL BUS_is_regulated_by_shunt(Bus* bus) {
@@ -1696,6 +1768,21 @@ Bus* BUS_new(int num_periods) {
   }
   else
     return NULL;
+}
+
+void BUS_set_network(Bus* bus, void* net) {
+  if (bus)
+    bus->net = (Net*)net;
+}
+
+void BUS_set_area(Bus* bus, int area) {
+  if (bus)
+    bus->area = area;
+}
+
+void BUS_set_zone(Bus* bus, int zone) {
+  if (bus)
+    bus->zone = zone;
 }
 
 void BUS_set_v_base(Bus* bus, REAL v_base) {
